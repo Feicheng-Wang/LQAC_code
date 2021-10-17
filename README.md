@@ -11,4 +11,4 @@ pickle 4.0 \
 numpy 1.17.4 \
 control 0.8.3 \
 seaborn 0.11.0 \
-sklearn 0.22.2.post1 \
+sklearn 0.22.2.post1 
