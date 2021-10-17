@@ -1,5 +1,37 @@
+'''
+Run this code to produce Figure 1 in the paper: 
+    Exact Asymptotics for Linear Quadratic Adaptive Control
+    Link: https://arxiv.org/abs/2011.01364
+
+Figure 1 is based on Algorithm 1 in the same paper:
+
+Algorithm 1: Stepwise Noisy Certainty Equivalent Control
+REQUIRE: Initial state $x_0$, stabilizing control matrix $K_0$, scalars $C_{x} > 0$, 
+$C_K > ||K||$, $\tau^2 > 0$, $\beta \in [1/2,1)$, and $\alpha>3/2$ when $\beta=1/2$.}
+\STATE Let $u_0 = K_0x_0 + \tau w_0$ and $u_1 = K_0x_1 + \tau w_1$, 
+    with w_0,w_1 iid from Normal(0,I_m).
+\FOR{$t = 2,3,\dots$}
+    \STATE Compute Kh_t by pluggin in estimator:
+        (\Ah_{t-1}, \Bh_{t-1}) \in 
+            \argmin_{(A', B')} \sum_{k=0}^{t-2} \ltwonorm{x_{k+1} - A' x_k - B' u_k}^2
+    and if stabilizable, plug them into the DARE to compute $\Kh_t$, otherwise set $\Kh_t=K_0$.
+    \STATE If 
+        $\norm{x_{t}} > C_x\log(t)$ or $\norm{\Kh_t} > C_K$, reset $\Kh_t = K_0$.
+    \STATE Let
+        u_t = \Kh_tx_t + \eta_t, \eta_t =  \tau\sqrt{t^{-(1-\beta)}\log^\alpha(t)} w_t,
+            w_t iid from Normal(0,I_d)
+\ENDFOR
+'''
 #%%
-import os
+'''
+import packages
+matplotlib 3.1.1
+pickle 4.0
+numpy 1.17.4
+control 0.8.3
+seaborn 0.11.0
+sklearn 0.22.2.post1
+'''
 import sys
 import pickle
 import numpy as np
@@ -9,7 +41,7 @@ from control import dare
 import matplotlib.pyplot as plt
 from numpy.linalg import inv
 from termcolor import colored # to color the error information
-from joblib import Parallel, delayed
+# from joblib import Parallel, delayed
 import scipy.stats as stats
 from coverage_regret_helper import get_K_grad
 import seaborn as sns
@@ -34,29 +66,9 @@ print("Loading package success!")
 
 # %%
 '''
-A dictionary which stores all the parameters in the system
-x_{t+1} = Ax_t + Bu_t + \varepsilon_t
-u_t = Khat u_t + \eta_t
-system noise -- \varepsilon_t \sim Normal(0, \std^2 I_d)
-exploration noise -- \eta_t \sim Normal(0, t^{1-beta}\log^alpha(t)tau^2 I_m)
-
-The LQR loss is defined by \sum_{t=1}^\top x_t^\top Q x_t + u_t^\top R u_t
-d: dimension of the state x_t
-m: dimension of the input u_t
-Q: weight matrix used to define the norm of x_t in LQR loss
-R: weight matrix used to define the norm of u_t in LQR loss
-A: linear transformation matrix connecting previous state x_t 
-    and current state x_{t+1}
-B: linear transformation matrix connecting previous input u_t 
-    and current state x_{t+1}
-K_0: the safety backup we use in our algorithm
-C_K: the threshold on ||K||, if ||Khat|| > C_K, then use K_0 instead
-C_x: the threshold on ||K||, if ||Khat|| > C_x, then use K_0 instead
-alpha: the log factor in exploration noise 
-name: folder name for storing the result
-std: the system noise std 
-tau: the std scale in exploration noise
-S_0: the initial place x_0
+A dictionary which stores most of the parameters in the system except for alpha and beta,
+which controls the exploration noise level.
+We don't set alpha and beta as fixed because want to try mutiple combinations of them.
 '''
 # stable system
 stable_dict = {
@@ -64,19 +76,14 @@ stable_dict = {
     'm': 1,
     'Q': np.eye(2),
     'R': np.eye(1),
-    # 'N': np.zeros([2, 1]),
     'A': np.array([[0.8, 0.1], [0, 0.8]]),
     'B': np.array([0, 1]).reshape(2, 1),
-    # A_hat = np.array([[0.7, 0.3], [0.2, 0.7]])
-    # B_hat = np.array([0.3, 0.7]).reshape(2, 1)
     'K_0': np.array([0, 0]).reshape(1,2),
     'C_K': 5,
     'C_x': 1,
-    # 'alpha': 2,
     'name': "stable_system",
-    # the std of system error \varepsilon_t
-    'std': 1, 
-    # the std of input exploration noise
+    'std': 1, # the std of system error \varepsilon_t
+    # controls the std of input exploration noise
     # which is: \eta_t \sim \calN(0, t^{1-beta}\log^alpha(t)tau^2 I_m)
     'tau': 0.2,
     'S_0': np.zeros(2) # the initial place x_0
@@ -87,35 +94,178 @@ stable_dict = {
 '''
 the class LQR contains all parameter choices
 remember to replace these after coding finisihed
-
-new: old
-T: self.n
-repeats: test_num
-self.n: self.d
-self.d: self.m
 '''
 class LQR:
+    """
+    A class to represent a LQR problem solved by Algorithm 1 in paper: https://arxiv.org/abs/2011.01364.
+    state -- x_{t+1} = Ax_t + Bu_t + \varepsilon_t
+    input -- u_t = Khat u_t + \eta_t
+    system noise -- \varepsilon_t \sim Normal(0, \std^2 I_d)
+    exploration noise -- \eta_t \sim Normal(0, t^{1-beta}\log^alpha(t)tau^2 I_m)
+
+    The LQR loss is defined by \sum_{t=1}^\top x_t^\top Q x_t + u_t^\top R u_t
+
+
+    Attributes
+    ----------
+    d : int
+        dimension of the state x_t
+    m : int 
+        dimension of the input u_t
+    dplusm : int 
+        the total dimension of state and input
+    Q : np.ndarray, shape (d,d)
+        weight matrix used to define the norm of x_t in LQR loss
+    R : np.ndarray, shape (m,m)
+        weight matrix used to define the norm of u_t in LQR loss
+    A : np.ndarray, shape (d,d)
+        linear transformation matrix connecting previous state x_t and current state x_{t+1}
+    B : np.ndarray, shape (d,m)
+        linear transformation matrix connecting previous input u_t and current state x_{t+1}
+    K_0 : np.ndarray, shape (m,d)
+        the safety backup we use in our algorithm
+    C_K : int/float
+        the threshold on ||K||, if ||Khat|| > C_K, then use K_0 instead of Khat
+    C_x : int/float
+        the threshold on ||x_t||, if ||x_t|| > C_x, then use K_0 instead of Khat
+    name : str
+        folder name for storing the result e.g. 'stable_system_beta0.5_alpha2'
+    n : int
+        number of steps to run, e.g. steps 0,1,...,n
+    test_num : int
+        number of repeated experiment times, i.e, run the same algorithm for test_num times.
+    std : int/float
+        the system noise std 
+    tau : int/float
+        the std scale in exploration noise
+    S_0 : np.ndarray with shape (d,)
+        the initial place x_0
+    lambda : float
+        the regulariztion parameter for a ridge regression
+    beta : float, common choice is between 0 and 1
+        scale of the exploration noise eta_t ~ t^{1-beta}\log^alpha(t)
+    alpha : float
+        scale of the exploration noise eta_t ~ t^{1-beta}\log^alpha(t)
+    P : np.ndarray, shape (d,d)
+        solution from DARE equations decided by A, B, Q, R
+        see: https://en.wikipedia.org/wiki/Algebraic_Riccati_equation
+    K : np.ndarray, shape (m,d)
+        same as P, solution from DARE equations decided by A, B, Q, R,
+        which is the oracle K (or called Kstar)
+    A_BK : np.ndarray, shape (d,d)
+        A + BK
+    theory_regret_coef : np.float64
+        Tr(B^TPB+R), which is part of the coef in total regret expression:
+        tau^2/beta Tr(B^TPB+R)T^{\beta}log^\alpha(T)
+    state_testnum : np.ndarray, shape (test_num, n + 1, d)
+        store the state history
+    state_star_testnum : np.ndarray, shape (test_num, n + 1, d)
+        store the state history driven by the oracle K
+    input_testnum : np.ndarray, shape (test_num, n + 1, m)
+        store the input history
+    input_star_testnum : np.ndarray, shape (test_num, n + 1, m)
+        store the input history driven by the oracle K
+    cov_matrix_testnum : np.ndarray, shape (test_num, n + 1, d + m, d + m)
+        store the cov_matrix (Gram matrix)
+    inv_cov_testnum : np.ndarray, shape (test_num, n + 1, d + m, d + m)
+        store the inverse of cov_matrix
+    XY_sum_testnum : np.ndarray, shape (test_num, n + 1, d + m, d)
+        store the sum from 0 to n x_iy_i^T \in R^{(d + m) * d}
+    AB_hat_testnum : np.ndarray, shape (test_num, n + 1, d, d + m)
+        store the estimates of [A,B] from 0 to n
+    K_tilde_testnum : np.ndarray, shape (test_num, n + 1, m, d)
+        store the estimates of K from 0 to n
+    K_hat_testnum : np.ndarray, shape (test_num, n + 1, m, d)
+        store the true controller Khat from 0 to n, 
+        which is mostly equal to K_tilde above, except some safe K_0 s
+    P_tilde_testnum : np.ndarray, shape (test_num, n + 1, d, d)
+        store the estimates of P from 0 to n
+    hit_C_x_index : list of list
+        list of list of int keeping index of K_0 induced by hitting C_x
+    hit_C_K_index : list of list
+        list of list of int keeping index of K_0 induced by hitting C_K
+    noise_varepsilon: np.ndarray, shape (test_num, n + 1, d)
+        the system noise: w_t iid from Normal(0,I_d)
+    noise_eta : np.ndarray, shape (test_num, n + 1, m)
+        the exploration noise: \eta_t =  \tau\sqrt{t^{-(1-\beta)}\log^\alpha(t)} w_t
+    
+
+    Methods
+    -------
+    next_input(Khat, cur_state, input_noise):
+        Return next step input u_t.
+    
+    next_state(cur_state, cur_input, system_noise):
+        Return next state x_t.
+
+    update_the_system(run, t):
+        Update the system at time t by loop when time t >= 2 (the intial two steps already decided)
+
+    initial_steps(S, U, run, setting = "myalg"):
+        Update the system at time t = 0 or 1.
+    """
     def __init__(self, para_dict, n, test_num, beta, alpha, log_flag = False, copy = None):
-        '''
-        para_dict: dictionary with all parameter values
-        self.n: the one shot experiment time length
-        test_num: repeat the same one shot experiment for 'test_num' times
-        beta, alpha: choices in the decay rate of exploration noise eta_t
-        '''
+        """
+        Constructs all the necessary attributes for the LQR object.
+
+        Parameters
+        ----------
+            para_dict : dict
+                a dict which contains all the following keys:
+                    d : int
+                        dimension of the state x_t
+                    m : int 
+                        dimension of the input u_t
+                    Q : np.ndarray; shape (n,n)
+                        weight matrix used to define the norm of x_t in LQR loss
+                    R : np.ndarray; shape (d,d)
+                        weight matrix used to define the norm of u_t in LQR loss
+                    A : np.ndarray; shape (n,n)
+                        linear transformation matrix connecting previous state x_t 
+                            and current state x_{t+1}
+                    B : np.ndarray; shape (n,d)
+                        linear transformation matrix connecting previous input u_t 
+                            and current state x_{t+1}
+                    K_0 : np.ndarray; shape (d,n)
+                        the safety backup we use in our algorithm
+                    C_K : int/float
+                        the threshold on ||K||, if ||Khat|| > C_K, then use K_0 instead of Khat
+                    C_x : int/float
+                        the threshold on ||x_t||, if ||x_t|| > C_x, then use K_0 instead of Khat
+                    name : str
+                        part of the folder name for storing the result
+                    std : int/float
+                        the system noise std 
+                    tau : int/float
+                        the std scale in exploration noise
+                    S_0 : np.ndarray with shape (n,)
+                        the initial place x_0
+            n : int
+                number of steps to run, e.g. steps 0,1,...,n
+            test_num : int
+                number of repeated experiment times, i.e, run the same algorithm for test_num times.
+            beta : float, common choice is between 0 and 1
+                scale of the exploration noise eta_t ~ t^{1-beta}\log^alpha(t)
+            alpha : float
+                scale of the exploration noise eta_t ~ t^{1-beta}\log^alpha(t)
+            log_flag : bool, optional
+                if True then update the Khat only at logarithmically often at time t=2^k
+                if False then update Khat at every step
+            copy : LQR, optional
+                used by log update to copy the same noise settings from stepwise LQR object
+        """
         # check the beta condition
         if beta < 0:
             sys.exit(colored("Beta can't be nagative value!", "red"))
 
         self.d = para_dict['d']
         self.m = para_dict['m']
-        self.md = self.m + self.d # the total dimension of state and input
+        self.dplusm = self.d + self.m # the total dimension of state and input
         self.Q = para_dict['Q']
         self.R = para_dict['R']
         self.A = para_dict['A']
         self.B = para_dict['B']
         self.K_0 = para_dict['K_0']
-        # solve P_0 by K_0
-
         self.C_K = para_dict['C_K']
         self.C_x = para_dict['C_x']
         self.log_flag = log_flag
@@ -123,7 +273,6 @@ class LQR:
         # name is unique identifiy of the object
         # name is also used in storing intermediate results
         self.name = f"{para_dict['name']}_beta{beta}_alpha{alpha}"
-
         self.n = n
         self.test_num = test_num
         self.std = para_dict['std']
@@ -133,10 +282,8 @@ class LQR:
         # assume we have ridge regression penalty 1e-5
         # this can ensure a unique solution even when the cov matrix is singular
         self.lamda = 1e-5 
-
         self.beta = beta
         self.alpha = alpha
-
 
         # parameters derived from given ones
         '''
@@ -155,16 +302,12 @@ class LQR:
         # tau^2/beta Tr(B^TPB+R)T^{\beta}log^\alpha(T)
         self.theory_regret_coef = np.trace(self.B.T.dot(self.P).dot(self.B) + self.R)
 
-
-        
         # create a dir if it not exist
         # this dir is used to store results generated from this class
         create_dir("./{}".format(self.name))
         print("This dir is used to store results generated from this LQR class")
 
-        
-
-        # assign memory to store all intermediate results needed all from {0,1,...,T}
+        # assign memory to store all intermediate results needed all from {0,1,...,n}
         self.state_testnum = np.zeros(
             [self.test_num, self.n + 1, self.d])
         self.state_star_testnum = np.zeros(
@@ -174,20 +317,19 @@ class LQR:
         self.input_star_testnum = np.zeros(
             [self.test_num, self.n + 1, self.m])
         self.cov_matrix_testnum = np.zeros(
-            [self.test_num, self.n + 1, self.md, self.md])
+            [self.test_num, self.n + 1, self.dplusm, self.dplusm])
         for i in range(self.test_num): # initialize
-            self.cov_matrix_testnum[i, :2] = self.lamda * np.eye(self.md)  
+            self.cov_matrix_testnum[i, :2] = self.lamda * np.eye(self.dplusm)  
         self.inv_cov_testnum = np.zeros(
-            [self.test_num, self.n + 1, self.md, self.md])
+            [self.test_num, self.n + 1, self.dplusm, self.dplusm])
         self.XY_sum_testnum = np.zeros(
-            [self.test_num, self.n + 1, self.md, self.d])
+            [self.test_num, self.n + 1, self.dplusm, self.d])
         # only up to time T(self.n), because the AB_hat subscript is t-1 instead of t at timestep t
         self.AB_hat_testnum = np.zeros(
-            [self.test_num, self.n, self.d, self.md])
+            [self.test_num, self.n, self.d, self.dplusm])
         for i in range(self.test_num): # initialize None because no estimate in the first one step
             self.AB_hat_testnum[i, 0] = None
         
-
         # the direct K estimate from Ahat Bhat
         self.K_tilde_testnum = np.zeros(
             [self.test_num, self.n + 1, self.m, self.d])
@@ -230,17 +372,63 @@ class LQR:
 
     # u_t = Khat u_t + \eta_t  
     def next_input(self, Khat, cur_state, input_noise):
+        '''
+        Return next step input u_t.
+        u_t = Khat u_t + \eta_t  
+
+        Parameters
+        ----------
+        Khat : np.ndarray, shape (m, d)
+            controller used at this step
+        cur_state : np.ndarray, shape (d, )
+            current state
+        input_noise : np.ndarray, shape (m, )
+            current exploration noise
+        
+        Returns
+        ----------
+        np.ndarray, shape (m, )
+            input for the next step
+        '''
         return np.dot(Khat, cur_state) + input_noise
 
     # x_{t+1} = Ax_t + Bu_t + \varepsilon_t
     def next_state(self, cur_state, cur_input, system_noise):
-        return np.dot(self.A, cur_state) + np.dot(self.B, cur_input) + system_noise
+        '''
+        Return next state x_t.
+        x_{t+1} = Ax_t + Bu_t + w_t
 
+        Parameters
+        ----------
+        cur_state : np.ndarray, shape (d, )
+            controller used at this step
+        cur_input : np.ndarray, shape (m, )
+            current state
+        system_noise : np.ndarray, shape (d, )
+            current system noise
+        
+        Returns
+        ----------
+        None
+        '''
+        return np.dot(self.A, cur_state) + np.dot(self.B, cur_input) + system_noise
 
     # def update_the_system(self, state_list, input_list, system_noise_list, input_noise_list, cur_cov, t):
     def update_the_system(self, run, t):
         '''
-        update the whole system at time t by loop, notice that this only works when time t >= 2
+        Update the system at time t by loop when time t >= 2 (the intial two steps already decided)
+
+        Parameters
+        ----------
+        run : int
+            the repeat experiment index
+        t : int
+            current time step
+        
+        Returns
+        ----------
+        np.ndarray, shape (m, )
+            input for the next step
         '''
         # update the cov matrix
         S, U = self.state_testnum[run, t-2], self.input_testnum[run, t-2]
@@ -252,7 +440,9 @@ class LQR:
         # calculate the new estimates Ahat_{t-1} Bhat_{t-1}
         self.XY_sum_testnum[run, t] = self.XY_sum_testnum[run, t-1] + np.outer(X, Y)
 
-        if self.log_flag and (t & (t-1) != 0):
+        # if update logarithmically often, then only update when t is power of 2,
+        # which can be checked by bitwise calculation t & (t-1)
+        if self.log_flag and (t & (t-1) != 0): 
             self.AB_hat_testnum[run, t-1] = self.AB_hat_testnum[run, t-2]
             self.K_tilde_testnum[run, t] = self.K_tilde_testnum[run, t-1]
             self.P_tilde_testnum[run, t] = self.P_tilde_testnum[run, t-1]
@@ -306,6 +496,25 @@ class LQR:
 
     # the first input and second input all use K_0 as controller
     def initial_steps(self, S, U, run, setting = "myalg"):
+        '''
+        Update the system at time t = 0 or 1.
+
+        Parameters
+        ----------
+        S : np.ndarray, shape (d, )
+            initial state sequence
+        U : np.ndarray, shape (m, )
+            initial input sequence
+        run : int
+            the repeat experiment index
+        setting : str, optional
+            "myalg" : update covariance and inverse covariance matrix records
+            other algorithms to be added..
+        
+        Returns
+        ----------
+        None
+        '''
         eta = self.noise_eta[run]
         epsilon = self.noise_varepsilon[run]
         U[0] = self.next_input(self.K_0, S[0], eta[0])
@@ -332,6 +541,18 @@ class LQR:
 
     # run one single trajectory of experiment from t=0 to t=T
     def run_once(self, run):
+        '''
+        Run the system once.
+
+        Parameters
+        ----------
+        run : int
+            the index of repeated experiments
+
+        Returns
+        ----------
+        None
+        '''
         # initial steps in both our algorithm and optimal algorithm
         S = self.state_testnum[run]
         U = self.input_testnum[run]
@@ -341,20 +562,24 @@ class LQR:
         U = self.input_star_testnum[run]
         self.initial_steps(S, U, run)
 
-        
         # estimate A, B, K starting from step t=2
         for i in range(2, self.n + 1):
             self.update_the_system(run, t=i)  
                 
-
         return
 
 
     def run_all(self):
         '''
         Repeat the run_once function for self.test_num times.
-        i.e. repeat the experiments to collect enough data 
-            in order to draw valid statistical conclusions.
+
+        Parameters
+        ----------
+        No parameters
+
+        Returns
+        ----------
+        None
         '''
         # one can make this parallel
         for i in range(self.test_num):
@@ -368,19 +593,20 @@ class LQR:
 '''
 test the class
 '''
-# stable_LQR = LQR(para_dict = stable_dict, n = 1000, test_num = 1000, beta = 0.5, alpha = 2)
-# stable_LQR.run_all()
-# stable_LQR.state_star_testnum[:, :10]
-# stable_LQR.data_for_plot()
+n = 200
+test_num = 100
+stable_LQR = LQR(para_dict = stable_dict, n = n, test_num = test_num, beta = 0.5, alpha = 2)
+stable_LQR.run_all()
 
-stable_LQR_log = LQR(para_dict = stable_dict, n = 1000, test_num = 1000, beta = 0.5, alpha = 2,
+stable_LQR_log = LQR(para_dict = stable_dict, n = n, test_num = test_num, beta = 0.5, alpha = 2,
      log_flag=True, copy = stable_LQR)
 stable_LQR_log.run_all()
 
+# show first 10 states of the first 5 runs
+stable_LQR.state_testnum[:5, :10]
 
-# %%
 '''
-test some values 
+check some other values if needed
 '''
 # stable_LQR.AB_hat_testnum
 # stable_LQR.cov_matrix_testnum
@@ -395,8 +621,8 @@ test some values
 '''
 save the object
 '''
-# with open(f'{stable_LQR.name}/n-{stable_LQR.n}test_num-{stable_LQR.test_num}.pkl', 'wb') as file:
-#     pickle.dump(stable_LQR, file)
+with open(f'{stable_LQR.name}/n-{stable_LQR.n}test_num-{stable_LQR.test_num}.pkl', 'wb') as file:
+    pickle.dump(stable_LQR, file)
 
 with open(f'{stable_LQR.name}/n-{stable_LQR.n}test_num-{stable_LQR.test_num}-log.pkl', 'wb') as file:
     pickle.dump(stable_LQR_log, file)
@@ -404,10 +630,13 @@ with open(f'{stable_LQR.name}/n-{stable_LQR.n}test_num-{stable_LQR.test_num}-log
 # ----------------- can restart from here -------------------
 # %%
 '''open the object'''
-# with open(f'stable_system_beta0.5_alpha2/n-200test_num-100.pkl', 'rb') as file:
+# n = 200
+# test_num = 100
+# with open(f'stable_system_beta0.5_alpha2/n-{n}test_num-{test_num}.pkl', 'rb') as file:
 #     stable_LQR = pickle.load(file)
+# with open(f'stable_system_beta0.5_alpha2/n-{n}test_num-{test_num}-log.pkl', 'rb') as file:
+#     stable_LQR_log = pickle.load(file)
 
-# stable_LQR.AB_hat_testnum[:10, :10]
 # %%
 
 
@@ -443,7 +672,7 @@ class SummarizeLQR():
         self.n = LQR_obj.n
         self.d = LQR_obj.d
         self.m = LQR_obj.m
-        self.md = LQR_obj.md
+        self.dplusm = LQR_obj.dplusm
         self.K = LQR_obj.K
         self.Q = LQR_obj.Q
         self.R = LQR_obj.R
@@ -485,7 +714,7 @@ class SummarizeLQR():
 
         #         A_hat = 
         #         self.AB_hat_testnum = np.zeros(
-        #         [self.test_num, self.n, self.d, self.md])
+        #         [self.test_num, self.n, self.d, self.dplusm])
         def decompose_AB_hat(LQR_obj):
             A_hat = LQR_obj.AB_hat_testnum[:, :, :, :self.d]
             if (self.m == 1):
@@ -568,7 +797,7 @@ class SummarizeLQR():
 
             tmp = tmp + tmp1
 
-        tmp_UB = stats.chi2.ppf(0.95, self.d*self.md)
+        tmp_UB = stats.chi2.ppf(0.95, self.d*self.dplusm)
 
         # coverage_flag_ = (tmp < tmp_UB) & (tmp > tmp_LB)
         coverage_flag_ = tmp < tmp_UB
@@ -620,7 +849,7 @@ class SummarizeLQR():
                 K_tilde = LQR_obj.K_tilde_testnum[run,i+1]
                 cov = LQR_obj.cov_matrix_testnum[run,i]
                 inv_cov = LQR_obj.inv_cov_testnum[run,i]
-                K_grad = get_K_grad(A_hat, B_hat, K_tilde, P_hat, self.R) # shape md, d(d+m)
+                K_grad = get_K_grad(A_hat, B_hat, K_tilde, P_hat, self.R) # shape dplusm, d(d+m)
                 AB_cov = np.kron(np.eye(self.d), inv_cov)
                 # print(AB_cov)
                 K_cov = K_grad.dot(AB_cov).dot(K_grad.T)
@@ -674,16 +903,14 @@ class SummarizeLQR():
 
 
 stable_LQR_summary = SummarizeLQR(stable_LQR, stable_LQR_log)
-# SummarizeLQR(stable_LQR)
 # %%
 '''
 save the summary
 '''
 with open(f'{stable_LQR.name}/n-{stable_LQR.n}test_num-{stable_LQR.test_num}-summary.pkl', 'wb') as file:
     pickle.dump(stable_LQR_summary, file)
-# stable_LQR_summary.plot()
 # %%
-def plot(LQR_summary: SummarizeLQR):
+def LQR_plot(LQR_summary: SummarizeLQR):
     # fig saving path
     path = f'{LQR_summary.name}/n-{LQR_summary.n}test_num-{LQR_summary.test_num}-fig'
     create_dir(path)
@@ -812,5 +1039,6 @@ def plot(LQR_summary: SummarizeLQR):
     fig.text(0.01, 0.5, 'Coverage', va='center', ha='center', rotation='vertical', fontsize=plt.rcParams['axes.labelsize'])
     fig.savefig("{}/Safety_Coverage_True.pdf".format(path), bbox_inches = 'tight')
 
-plot(stable_LQR_summary)
+LQR_plot(stable_LQR_summary)
 # %%
+
