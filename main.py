@@ -203,6 +203,12 @@ class LQR:
 
     initial_steps(S, U, run, setting = "myalg"):
         Update the system at time t = 0 or 1.
+
+    run_once(run):
+        Run the system once.
+
+    run_all():
+        Repeat the run_once function for self.test_num times.
     """
     def __init__(self, para_dict, n, test_num, beta, alpha, log_flag = False, copy = None):
         """
