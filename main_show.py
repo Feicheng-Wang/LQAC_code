@@ -22,20 +22,16 @@ $C_K > ||K||$, $\tau^2 > 0$, $\beta \in [1/2,1)$, and $\alpha>3/2$ when $\beta=1
             w_t iid from Normal(0,I_d)
 \ENDFOR
 '''
+import sys
+import pickle
+import numpy as np
+sys.path.append('./helper_functions')
 from matplotlib import rc
-from sklearn.linear_model import LinearRegression
-import seaborn as sns
-from coverage_regret_helper import get_K_grad
-import scipy.stats as stats
 from termcolor import colored  # to color the error information
 from numpy.linalg import inv
 import matplotlib.pyplot as plt
 from control import dare
 from useful_chunk import create_dir
-import sys
-import pickle
-import numpy as np
-sys.path.append('./helper_functions')
 font = {'size': 32}
 params = {'axes.labelsize': 32,
           'axes.titlesize': 32,
