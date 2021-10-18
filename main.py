@@ -1,3 +1,4 @@
+# %%
 '''
 Run this code to produce Figure 1 in the paper: 
     Exact Asymptotics for Linear Quadratic Adaptive Control
@@ -21,16 +22,6 @@ $C_K > ||K||$, $\tau^2 > 0$, $\beta \in [1/2,1)$, and $\alpha>3/2$ when $\beta=1
         u_t = \Kh_tx_t + \eta_t, \eta_t =  \tau\sqrt{t^{-(1-\beta)}\log^\alpha(t)} w_t,
             w_t iid from Normal(0,I_d)
 \ENDFOR
-'''
-#%%
-'''
-import packages
-matplotlib 3.1.1
-pickle 4.0
-numpy 1.17.4
-control 0.8.3
-seaborn 0.11.0
-sklearn 0.22.2.post1
 '''
 import sys
 import pickle
@@ -63,8 +54,6 @@ np.random.seed(1234)
 print("Loading package success!")
 
 
-
-# %%
 '''
 A dictionary which stores most of the parameters in the system except for alpha and beta,
 which controls the exploration noise level.
@@ -90,7 +79,6 @@ stable_dict = {
 }
 
 
-# %%
 '''
 the class LQR contains all parameter choices
 remember to replace these after coding finisihed
@@ -419,7 +407,6 @@ class LQR:
         '''
         return np.dot(self.A, cur_state) + np.dot(self.B, cur_input) + system_noise
 
-    # def update_the_system(self, state_list, input_list, system_noise_list, input_noise_list, cur_cov, t):
     def update_the_system(self, run, t):
         '''
         Update the system at time t by loop when time t >= 2 (the intial two steps already decided)
@@ -543,8 +530,6 @@ class LQR:
             self.inv_cov_testnum[run, 0] = inv(self.cov_matrix_testnum[run, 0])
             self.inv_cov_testnum[run, 1] = inv(self.cov_matrix_testnum[run, 1])
 
-
-
     # run one single trajectory of experiment from t=0 to t=T
     def run_once(self, run):
         '''
@@ -574,7 +559,6 @@ class LQR:
                 
         return
 
-
     def run_all(self):
         '''
         Repeat the run_once function for self.test_num times.
@@ -593,46 +577,30 @@ class LQR:
                 print(f"{i+1}-th experiment finished, total {self.test_num}")
             self.run_once(run = i)
         
+def main():
+    '''
+    test the class
+    '''
+    n = 200
+    test_num = 100
+    stable_LQR = LQR(para_dict = stable_dict, n = n, test_num = test_num, beta = 0.5, alpha = 2)
+    stable_LQR.run_all()
 
+    stable_LQR_log = LQR(para_dict = stable_dict, n = n, test_num = test_num, beta = 0.5, alpha = 2,
+        log_flag=True, copy = stable_LQR)
+    stable_LQR_log.run_all()
 
+    # show first 10 states of the first 5 runs
+    print(stable_LQR.state_testnum[:5, :10])
 
-'''
-test the class
-'''
-n = 200
-test_num = 100
-stable_LQR = LQR(para_dict = stable_dict, n = n, test_num = test_num, beta = 0.5, alpha = 2)
-stable_LQR.run_all()
+    # save the objects
+    with open(f'{stable_LQR.name}/n-{stable_LQR.n}test_num-{stable_LQR.test_num}.pkl', 'wb') as file:
+        pickle.dump(stable_LQR, file)
 
-stable_LQR_log = LQR(para_dict = stable_dict, n = n, test_num = test_num, beta = 0.5, alpha = 2,
-     log_flag=True, copy = stable_LQR)
-stable_LQR_log.run_all()
+    with open(f'{stable_LQR.name}/n-{stable_LQR.n}test_num-{stable_LQR.test_num}-log.pkl', 'wb') as file:
+        pickle.dump(stable_LQR_log, file)
 
-# show first 10 states of the first 5 runs
-stable_LQR.state_testnum[:5, :10]
-
-'''
-check some other values if needed
-'''
-# stable_LQR.AB_hat_testnum
-# stable_LQR.cov_matrix_testnum
-# stable_LQR.inv_cov_testnum
-# stable_LQR.XY_sum_testnum
-# stable_LQR.K_hat_testnum[0, :]
-# stable_LQR.K_tilde_testnum[0, :10]
-# stable_LQR.P_tilde_testnum[0, :10]
-
-
-# %%
-'''
-save the object
-'''
-with open(f'{stable_LQR.name}/n-{stable_LQR.n}test_num-{stable_LQR.test_num}.pkl', 'wb') as file:
-    pickle.dump(stable_LQR, file)
-
-with open(f'{stable_LQR.name}/n-{stable_LQR.n}test_num-{stable_LQR.test_num}-log.pkl', 'wb') as file:
-    pickle.dump(stable_LQR_log, file)
-
+main()
 # ----------------- can restart from here -------------------
 # %%
 '''open the object'''
