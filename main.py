@@ -545,7 +545,6 @@ class LQR:
             self.inv_cov_testnum[run, 1] = inv(self.cov_matrix_testnum[run, 1])
 
     # run one single trajectory of experiment from t=0 to t=T
-
     def run_once(self, run):
         '''
         Run the system once.
@@ -880,7 +879,6 @@ class SummarizeLQR():
                 # shape dplusm, d(d+m)
                 K_grad = get_K_grad(A_hat, B_hat, K_tilde, P_hat, self.R)
                 AB_cov = np.kron(np.eye(self.d), inv_cov)
-                # print(AB_cov)
                 K_cov = K_grad.dot(AB_cov).dot(K_grad.T)
                 K_tilde_vec = (K_tilde-self.K).reshape(-1)
                 K_test_value = K_tilde_vec.dot(inv(K_cov)).dot(K_tilde_vec)
